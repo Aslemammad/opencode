@@ -46,14 +46,12 @@ async function ensureService(sandbox: Sandbox, repoPath: string) {
   const start = async () => {
     const binCheck = await sandbox.exec(`test -x ${BIN}`)
     if (!binCheck.success) {
-      console.error("opencode binary not found in sandbox")
       throw new Error("opencode binary missing")
     }
 
     try {
       const processes = await sandbox.listProcesses()
       const running = processes.find((p) => p.command.includes(`${BIN} serve`))
-      console.log("running", running)
       if (running) {
         const probe = await sandbox.exec(`curl --silent --max-time 2 http://127.0.0.1:${PORT}`)
         if (probe.success) {
@@ -67,12 +65,9 @@ async function ensureService(sandbox: Sandbox, repoPath: string) {
     await waitForReady(sandbox)
 
     const secondProbe = await sandbox.exec(`curl --silent --max-time 10 http://127.0.0.1:${PORT}`)
-    console.log("is it ready?", secondProbe)
     if (!secondProbe.success) {
-      console.warn("service probe failed, continuing", secondProbe.stderr)
       const logs = await proc.getLogs().catch(() => ({ stdout: "", stderr: "" }))
       if (logs.stdout || logs.stderr) {
-        console.warn("serve logs", logs.stdout, logs.stderr)
       }
     }
 
@@ -91,26 +86,29 @@ const sandboxId = (org: string, repo: string) => `desktop-${org}-${repo}`
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    console.log("request", request.url)
     const proxied = await proxyToSandbox(request, env)
     if (proxied) return proxied
 
     const url = new URL(request.url)
+    const parts = url.pathname.split("/").filter(Boolean)
+    const isDefaultPath = parts[0] === DEFAULT_ORG && parts[1] === DEFAULT_REPO
+    const assetRequest = isDefaultPath
+      ? new Request(new URL(`/${DEFAULT_ORG}/${DEFAULT_REPO}/${parts.slice(2).join("/")}`, url).toString(), request)
+      : request
     if (url.pathname.startsWith("/container")) {
-      console.log("container route", { path: url.pathname, search: url.search })
       const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, {
         keepAlive: true,
         sleepAfter: "30m",
         normalizeId: true,
       })
-      console.log("sandbox acquired", SANDBOX_ID)
       const repoPath = await ensureRepo(sandbox, DEFAULT_ORG, DEFAULT_REPO)
-      console.log("repo ensured", repoPath)
       await ensureService(sandbox, repoPath)
 
       const path = `/${url.pathname.slice("/container".length) || ""}`.replace(/\/+/, "/")
-      const target = `http://127.0.0.1:${PORT}${path}${url.search}`
-      console.log("proxying to container target", target)
+      const target =
+        path.startsWith("/global/event") && !url.search
+          ? `http://127.0.0.1:${PORT}${path}?directory=${encodeURIComponent(repoPath)}`
+          : `http://127.0.0.1:${PORT}${path}${url.search || `?directory=${encodeURIComponent(repoPath)}`}`
 
       try {
         const headers = new Headers(request.headers)
@@ -123,29 +121,29 @@ export default {
           }),
           PORT,
         )
-        console.log("proxy response", proxied.status)
         return proxied
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        console.error("proxy failed", message)
         return Response.json({ error: "proxy failed", message }, { status: 502 })
       }
     }
     const accept = request.headers.get("accept") || ""
     if (url.pathname.includes(".")) {
-      const asset = await env.ASSETS.fetch(request)
+      const asset = await env.ASSETS.fetch(assetRequest)
       if (asset.status !== 404) return asset
 
-      const fallbackUrl = new URL(request.url)
-      fallbackUrl.pathname = "/index.html"
-      return env.ASSETS.fetch(new Request(fallbackUrl.toString(), request))
-    }
-    if (accept.includes("text/html")) {
-      const fallbackUrl = new URL(request.url)
-      fallbackUrl.pathname = "/index.html"
-      return env.ASSETS.fetch(new Request(fallbackUrl.toString(), request))
+      const fallbackUrl = new URL(assetRequest.url)
+      fallbackUrl.pathname = "/"
+      return env.ASSETS.fetch(new Request(fallbackUrl.toString(), assetRequest))
     }
 
-    return env.ASSETS.fetch(request)
+    const indexUrl = new URL(assetRequest.url)
+    indexUrl.pathname = "/"
+    return env.ASSETS.fetch(new Request(indexUrl.toString(), assetRequest))
   },
 }
+
+// amazing, so redirect is disabled now by some changes i made, thank you
+
+//   TODO: why there's no session or no session is possible to create. i assume it's because the url form is not something the
+//   desktop expects so it avoids to create a new session page

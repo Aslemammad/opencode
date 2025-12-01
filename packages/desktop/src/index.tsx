@@ -48,7 +48,7 @@ render(
                     return <Navigate href={`${slug()}/session`} />
                   }}
                 />
-                <Route path="/:dir" component={DirectoryLayout}>
+                <Route path="/*dir" component={DirectoryLayout}>
                   <Route path="/" component={() => <Navigate href="session" />} />
                   <Route
                     path="/session/:id?"

@@ -13,7 +13,7 @@ export default function Layout(props: ParentProps) {
   const sync = useGlobalSync()
   const directory = createMemo(() => {
     const decoded = base64Decode(params.dir!)
-    return sync.data.projects.find((x) => x.worktree === decoded)?.worktree ?? "/"
+    return sync.data.projects.find((x) => x.worktree === decoded)?.worktree ?? decoded
   })
   return (
     <SDKProvider directory={directory()}>
